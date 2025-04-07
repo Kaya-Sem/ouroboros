@@ -1,0 +1,9 @@
+services:
+  ouroboros:
+    image: ouroboros
+    build: .
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+    environment:
+      NAME: Kaya-Sem

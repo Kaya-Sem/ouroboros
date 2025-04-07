@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/gob"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -11,21 +12,28 @@ import (
 	"time"
 )
 
-// @title TCP Client API
-// @version 1.0
-// @description A simple HTTP interface to your TCP client.
-// @host localhost:8081
-// @BasePath /
+type Message struct {
+	Type string
+	Data interface{}
+}
 
-// ping godoc
-// @Summary      Ping the service
-// @Description  Responds with pong
-// @Tags         health
-// @Produce      json
-// @Success      200 {object} map[string]string
-// @Router       /ping [get]
-func pingHandler(w http.ResponseWriter, r *http.Request) {
-	json.NewEncoder(w).Encode(map[string]string{"message": "pong"})
+type NameResponse struct {
+	Name string
+}
+
+type HandlerFunc func(msg Message, conn net.Conn)
+
+var handlers = map[string]HandlerFunc{
+	"name_request": handleNameRequest,
+}
+
+func handleNameRequest(msg Message, conn net.Conn) {
+	response := Message{
+		Type: "name_response",
+		Data: NameResponse{Name: "My PC"},
+	}
+
+	gob.NewEncoder(conn).Encode(response)
 }
 
 const (
@@ -158,14 +166,24 @@ func (s *Server) Start() {
 	}
 }
 
+func getClientName() string {
+	val, exists := os.LookupEnv("NAME")
+	if !exists {
+		val = "default"
+	}
+
+	return val
+}
+
 func main() {
+	log.SetFlags(0)
+	log.Printf("Client: %s", getClientName())
 	server := newServer()
 
 	go server.Start()
 
 	time.Sleep(1 * time.Second)
 
-	http.HandleFunc("/ping", pingHandler)
 	http.HandleFunc("/peers", server.peersHandler)
 
 	// qerve Swagger documentation
