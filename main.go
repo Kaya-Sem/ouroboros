@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -34,89 +35,108 @@ const (
 )
 
 type Peer struct {
-	conn *net.TCPConn
-	uid  string
+	conn    *net.TCPConn
+	UID     string    `json:"uid"`
+	Address string    `json:"address"`
+	Since   time.Time `json:"connected_since"`
 }
 
-func newPeer(conn *net.TCPConn, uid string) *Peer {
-	return &Peer{uid: conn.RemoteAddr().String(), conn: conn}
-}
-
-func (p *Peer) Handle() {
-
-	var conn *net.TCPConn = p.conn
-
-	log.Printf("Handling for sender: %s over %s", conn.RemoteAddr().String(), conn.RemoteAddr().Network())
-
-	defer conn.Close()
-
-	buffer := make([]byte, 1024)
-
-	for {
-		n, err := conn.Read(buffer)
-		if err != nil {
-			log.Printf("Connection closed: %v", err)
-			return
-		}
-
-		msg := string(buffer[:n])
-		log.Printf("[RECEIVED] %s", msg)
-
-		time := time.Now().Format(time.ANSIC)
-		responseStr := fmt.Sprintf("Echo: %v @ %v", msg, time)
-		conn.Write([]byte(responseStr))
+func newPeer(conn *net.TCPConn) *Peer {
+	return &Peer{
+		conn:    conn,
+		UID:     conn.RemoteAddr().String(),
+		Address: conn.RemoteAddr().String(),
+		Since:   time.Now(),
 	}
-
 }
 
 type Server struct {
 	peers []*Peer
+	mu    sync.Mutex // to protect concurrent access to peers
 }
 
-type Client struct {
+func (s *Server) AddPeer(p *Peer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.peers = append(s.peers, p)
 }
 
-func InitClient() Client {
-	return Client{}
-}
-
-func (c *Client) Message(message string, address *net.TCPAddr) {
-	conn, err := net.DialTCP(SERVER_TYPE, nil, address)
-	if err != nil {
-		log.Printf("Dial failed: %s", err.Error())
-		return
+func (s *Server) RemovePeer(conn *net.TCPConn) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, p := range s.peers {
+		if p.conn == conn {
+			s.peers = append(s.peers[:i], s.peers[i+1:]...)
+			return
+		}
 	}
-	defer conn.Close()
+}
 
-	_, err = conn.Write([]byte(message))
-	if err != nil {
-		log.Printf("Write data failed: %s", err.Error())
-		return
+func (s *Server) GetPeers() []Peer {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	peersCopy := make([]Peer, len(s.peers))
+	for i, p := range s.peers {
+		peersCopy[i] = *p
 	}
-	log.Printf("Sent message: %s", message)
+	return peersCopy
+}
+
+// peersHandler godoc
+// @Summary      List connected peers
+// @Description  Returns a list of currently connected TCP peers
+// @Tags         peers
+// @Produce      json
+// @Success      200 {object} []Peer
+// @Router       /peers [get]
+func (s *Server) peersHandler(w http.ResponseWriter, r *http.Request) {
+	peers := s.GetPeers()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(peers)
+}
+
+func (p *Peer) Handle(server *Server) {
+	defer func() {
+		p.conn.Close()
+		server.RemovePeer(p.conn)
+	}()
+
+	log.Printf("Handling connection from: %s", p.Address)
 
 	buffer := make([]byte, 1024)
-	n, err := conn.Read(buffer)
-	if err != nil {
-		log.Printf("Read response failed: %s", err.Error())
-		return
-	}
 
-	response := string(buffer[:n])
-	log.Printf("Received response: %s", response)
+	for {
+		n, err := p.conn.Read(buffer)
+		if err != nil {
+			log.Printf("Connection closed (%s): %v", p.Address, err)
+			return
+		}
+
+		msg := string(buffer[:n])
+		log.Printf("[RECEIVED from %s] %s", p.Address, msg)
+
+		time := time.Now().Format(time.ANSIC)
+		responseStr := fmt.Sprintf("Echo: %v @ %v", msg, time)
+		p.conn.Write([]byte(responseStr))
+	}
 }
 
-func (s Server) Start() {
+func newServer() *Server {
+	return &Server{
+		peers: make([]*Peer, 0, 32), // initial capacity 32
+	}
+}
 
+func (s *Server) Start() {
 	listen, err := net.Listen(SERVER_TYPE, SERVER_HOST+":"+SERVER_PORT)
-	log.Printf("Started listening server at %s:%s", SERVER_HOST, SERVER_PORT)
-
 	if err != nil {
 		log.Fatal(err)
 		os.Exit(1)
 	}
-
 	defer listen.Close()
+
+	log.Printf("Started listening server at %s:%s", SERVER_HOST, SERVER_PORT)
 
 	for {
 		conn, err := listen.Accept()
@@ -132,47 +152,25 @@ func (s Server) Start() {
 			continue
 		}
 
-		peer := newPeer(tcpConn, "placeholder")
-		s.peers = append(s.peers, peer)
-		go peer.Handle()
-
+		peer := newPeer(tcpConn)
+		s.AddPeer(peer)
+		go peer.Handle(s)
 	}
-
-}
-
-func newServer() Server {
-	return Server{peers: make([]*Peer, 32)}
 }
 
 func main() {
-	// Run the TCP server in the background
-	go func() {
-		server := newServer()
-		server.Start()
-	}()
+	server := newServer()
 
-	// Wait before the client tries to connect
+	go server.Start()
+
 	time.Sleep(1 * time.Second)
 
-	// Create the TCP client connection
-	tcpServer, err := net.ResolveTCPAddr(SERVER_TYPE, SERVER_HOST+":"+SERVER_PORT)
-	if err != nil {
-		log.Printf("Error resolving address: %s", err.Error())
-		return
-	}
-	client := InitClient()
-	client.Message("my message!", tcpServer)
-
-	// Start the HTTP server for the API
 	http.HandleFunc("/ping", pingHandler)
+	http.HandleFunc("/peers", server.peersHandler) // Use the server's method
 
-	// Serve the Swagger documentation JSON/YAML
+	// qerve Swagger documentation
 	http.Handle("/docs/", http.StripPrefix("/docs", http.FileServer(http.Dir("./docs"))))
 
-	// Start HTTP server on port 8081
 	log.Println("HTTP API listening on :8081")
 	log.Fatal(http.ListenAndServe(":8081", nil))
-
-	// Block the main goroutine forever
-	select {}
 }
