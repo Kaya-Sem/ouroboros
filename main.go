@@ -14,7 +14,44 @@ const (
 	SERVER_TYPE = "tcp"
 )
 
+type Peer struct {
+	conn *net.TCPConn
+	uid  string
+}
+
+func newPeer(conn *net.TCPConn, uid string) *Peer {
+	return &Peer{uid: conn.RemoteAddr().String(), conn: conn}
+}
+
+func (p *Peer) Handle() {
+
+	var conn *net.TCPConn = p.conn
+
+	log.Printf("Handling for sender: %s over %s", conn.RemoteAddr().String(), conn.RemoteAddr().Network())
+
+	defer conn.Close()
+
+	buffer := make([]byte, 1024)
+
+	for {
+		n, err := conn.Read(buffer)
+		if err != nil {
+			log.Printf("Connection closed: %v", err)
+			return
+		}
+
+		msg := string(buffer[:n])
+		log.Printf("[RECEIVED] %s", msg)
+
+		time := time.Now().Format(time.ANSIC)
+		responseStr := fmt.Sprintf("Echo: %v @ %v", msg, time)
+		conn.Write([]byte(responseStr))
+	}
+
+}
+
 type Server struct {
+	peers []*Peer
 }
 
 type Client struct {
@@ -51,6 +88,7 @@ func (c *Client) Message(message string, address *net.TCPAddr) {
 }
 
 func (s Server) Start() {
+
 	listen, err := net.Listen(SERVER_TYPE, SERVER_HOST+":"+SERVER_PORT)
 	log.Printf("Started listening server at %s:%s", SERVER_HOST, SERVER_PORT)
 
@@ -58,26 +96,38 @@ func (s Server) Start() {
 		log.Fatal(err)
 		os.Exit(1)
 	}
-	// close listener
+
 	defer listen.Close()
+
 	for {
 		conn, err := listen.Accept()
 		if err != nil {
-			log.Fatal(err)
-			os.Exit(1)
+			log.Printf("Accept error: %v", err)
+			continue
 		}
-		go handleRequest(conn)
-		log.Printf("Sender: %s over %s", conn.RemoteAddr().String(), conn.RemoteAddr().Network())
+
+		tcpConn, ok := conn.(*net.TCPConn)
+		if !ok {
+			log.Printf("Connection is not TCP")
+			conn.Close()
+			continue
+		}
+
+		peer := newPeer(tcpConn, "placeholder")
+		s.peers = append(s.peers, peer)
+		go peer.Handle()
+
 	}
+
 }
 
-func InitServer() Server {
-	return Server{}
+func newServer() Server {
+	return Server{peers: make([]*Peer, 32)}
 }
 
 func main() {
 	go func() {
-		server := InitServer()
+		server := newServer()
 		server.Start()
 	}()
 
@@ -93,19 +143,4 @@ func main() {
 
 	fmt.Println("Server is running. Press Ctrl+C to exit.")
 	select {} // This blocks forever until program is interrupted
-}
-
-func handleRequest(conn net.Conn) {
-	buffer := make([]byte, 1024)
-	_, err := conn.Read(buffer)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	time := time.Now().Format(time.ANSIC)
-	responseStr := fmt.Sprintf("Your message is: %v. Received time: %v", string(buffer[:]), time)
-	conn.Write([]byte(responseStr))
-
-	// close conn
-	conn.Close()
 }
