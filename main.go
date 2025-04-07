@@ -1,12 +1,31 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"time"
 )
+
+// @title TCP Client API
+// @version 1.0
+// @description A simple HTTP interface to your TCP client.
+// @host localhost:8081
+// @BasePath /
+
+// ping godoc
+// @Summary      Ping the service
+// @Description  Responds with pong
+// @Tags         health
+// @Produce      json
+// @Success      200 {object} map[string]string
+// @Router       /ping [get]
+func pingHandler(w http.ResponseWriter, r *http.Request) {
+	json.NewEncoder(w).Encode(map[string]string{"message": "pong"})
+}
 
 const (
 	SERVER_HOST = "0.0.0.0"
@@ -126,13 +145,16 @@ func newServer() Server {
 }
 
 func main() {
+	// Run the TCP server in the background
 	go func() {
 		server := newServer()
 		server.Start()
 	}()
 
+	// Wait before the client tries to connect
 	time.Sleep(1 * time.Second)
 
+	// Create the TCP client connection
 	tcpServer, err := net.ResolveTCPAddr(SERVER_TYPE, SERVER_HOST+":"+SERVER_PORT)
 	if err != nil {
 		log.Printf("Error resolving address: %s", err.Error())
@@ -141,6 +163,16 @@ func main() {
 	client := InitClient()
 	client.Message("my message!", tcpServer)
 
-	fmt.Println("Server is running. Press Ctrl+C to exit.")
-	select {} // This blocks forever until program is interrupted
+	// Start the HTTP server for the API
+	http.HandleFunc("/ping", pingHandler)
+
+	// Serve the Swagger documentation JSON/YAML
+	http.Handle("/docs/", http.StripPrefix("/docs", http.FileServer(http.Dir("./docs"))))
+
+	// Start HTTP server on port 8081
+	log.Println("HTTP API listening on :8081")
+	log.Fatal(http.ListenAndServe(":8081", nil))
+
+	// Block the main goroutine forever
+	select {}
 }
