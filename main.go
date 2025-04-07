@@ -166,7 +166,7 @@ func main() {
 	time.Sleep(1 * time.Second)
 
 	http.HandleFunc("/ping", pingHandler)
-	http.HandleFunc("/peers", server.peersHandler) // Use the server's method
+	http.HandleFunc("/peers", server.peersHandler)
 
 	// qerve Swagger documentation
 	http.Handle("/docs/", http.StripPrefix("/docs", http.FileServer(http.Dir("./docs"))))
