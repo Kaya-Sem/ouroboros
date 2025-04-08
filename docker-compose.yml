@@ -1,9 +1,19 @@
 services:
-  ouroboros:
+  ouroboros_1:
     image: ouroboros
     build: .
     ports:
       - "8080:8080"
       - "8081:8081"
     environment:
-      NAME: Kaya-Sem
+      NAME: Kaya-Sem-1
+
+  ouroboros_2:
+    image: ouroboros
+    build: .
+    ports:
+      - "8082:8080" 
+      - "8083:8081"
+    environment:
+      NAME: Kaya-Sem-2
+

@@ -14,6 +14,6 @@ COPY . .
 
 RUN swag init
 RUN go build -o ouroboros
-EXPOSE 8080
-EXPOSE 8081
+EXPOSE 8080 8081
+
 CMD ["/build/ouroboros"]
