@@ -14,6 +14,9 @@ COPY . .
 
 RUN swag init
 RUN go build -o ouroboros
-EXPOSE 8080 8081
+
+# Explicitly specify UDP ports
+EXPOSE 8080/udp
+EXPOSE 8081/udp
 
 CMD ["/build/ouroboros"]

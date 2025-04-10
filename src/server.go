@@ -97,6 +97,18 @@ func (s *MessageBus) handleUDPMessages() {
 
 // processMessage decodes and handles an incoming message
 func (s *MessageBus) processMessage(data []byte, addr *net.UDPAddr) {
+	// Get our local IP first
+	localIP, err := getLocalIP()
+	if err != nil {
+		log.Printf("Error getting local IP: %v", err)
+		return
+	}
+
+	// Ignore messages from our own IP
+	if addr.IP.String() == localIP {
+		return
+	}
+
 	var msg Message
 	dec := gob.NewDecoder(bytes.NewReader(data))
 	if err := dec.Decode(&msg); err != nil {
@@ -239,6 +251,12 @@ func (s *MessageBus) AnnouncePresence() {
 
 // BroadcastNetwork sends a message to the entire network (including peers we don't know yet)
 func (s *MessageBus) BroadcastNetwork(msg Message, port int) error {
+	// Get our local IP first
+	localIP, err := getLocalIP()
+	if err != nil {
+		return fmt.Errorf("failed to get local IP: %w", err)
+	}
+
 	// Encode the message
 	var buf bytes.Buffer
 	if err := gob.NewEncoder(&buf).Encode(msg); err != nil {
@@ -252,7 +270,7 @@ func (s *MessageBus) BroadcastNetwork(msg Message, port int) error {
 		return fmt.Errorf("get interfaces error: %w", err)
 	}
 
-	// Broadcast on each eligible interface
+	// Find the interface with our local IP and broadcast only on that one
 	for _, iface := range interfaces {
 		// Skip loopback and down interfaces
 		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
@@ -270,25 +288,30 @@ func (s *MessageBus) BroadcastNetwork(msg Message, port int) error {
 				continue
 			}
 
-			// Create broadcast address for this network
-			broadcastIP := net.IP(make([]byte, 4))
-			for i := range ipNet.IP.To4() {
-				broadcastIP[i] = ipNet.IP.To4()[i] | ^ipNet.Mask[i]
-			}
-			broadcastAddr := &net.UDPAddr{
-				IP:   broadcastIP,
-				Port: port,
-			}
+			// Check if this is the interface with our local IP
+			if ipNet.IP.String() == localIP {
+				// Create broadcast address for this network
+				broadcastIP := net.IP(make([]byte, 4))
+				for i := range ipNet.IP.To4() {
+					broadcastIP[i] = ipNet.IP.To4()[i] | ^ipNet.Mask[i]
+				}
+				broadcastAddr := &net.UDPAddr{
+					IP:   broadcastIP,
+					Port: port,
+				}
 
-			// Send broadcast packet
-			_, err := s.udpConn.WriteToUDP(msgData, broadcastAddr)
-			if err != nil {
-				log.Printf("network broadcast failed on %s: %v", iface.Name, err)
+				// Send broadcast packet
+				_, err := s.udpConn.WriteToUDP(msgData, broadcastAddr)
+				if err != nil {
+					return fmt.Errorf("network broadcast failed on %s: %v", iface.Name, err)
+				}
+				log.Printf("Successfully broadcasted to the network on interface %s", iface.Name)
+				return nil
 			}
 		}
 	}
-	log.Println("Succesfully broadcasted to the network")
-	return nil
+
+	return fmt.Errorf("no interface found matching local IP %s", localIP)
 }
 
 func getLocalIP() (string, error) {
