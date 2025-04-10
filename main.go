@@ -13,17 +13,20 @@ func main() {
 	log.Printf("Client: %s", src.GetClientName())
 	src.InitializeInterfaces()
 
-	server := src.NewServer()
+	messageBus := src.NewMessageBus()
 
-	go server.Start()
+	go messageBus.Start()
+
+	messageBus.AnnouncePresence()
 
 	time.Sleep(1 * time.Second)
 
-	http.HandleFunc("/peers", server.PeersHandler)
+	http.HandleFunc("/peers", messageBus.PeersHandler)
 
 	// Serve Swagger documentation
 	http.Handle("/docs/", http.StripPrefix("/docs", http.FileServer(http.Dir("./docs"))))
 
 	log.Println("HTTP API listening on :8081")
 	log.Fatal(http.ListenAndServe(":8081", nil))
+
 }

@@ -3,7 +3,6 @@ package src
 import (
 	"encoding/gob"
 	"log"
-	"net"
 	"time"
 )
 
@@ -12,22 +11,31 @@ type MessageType int
 const (
 	Unknown MessageType = iota
 
+	PeerDiscovery
+	PeerDiscoveryReply
+
 	GetClientInfo
 	GetClientInfoResponse
 
 	GetPeersRequest
 	GetPeersReply
+
+	ClientDiscoveryAnnouncement
+	ClientDiscoveryAnnouncementReply
 )
 
-// TODO: to be called before init servers etc
+/* should be called before any messages are processed or sent */
 func InitializeInterfaces() {
-	log.Println("Initialising gob data interfaces")
 	gob.Register(ClientInfoData{})
+	gob.Register(PeerDiscoveryData{})
+	gob.Register(PeerDiscoveryReplyData{})
+	gob.Register(ClientDiscoveryAnnouncementData{})
 }
 
 type Message struct {
-	Type MessageType
-	Data interface{}
+	Type   MessageType
+	Data   interface{}
+	Sender string
 }
 
 type ClientInfoData struct {
@@ -35,17 +43,51 @@ type ClientInfoData struct {
 	OnlineSince time.Time
 }
 
-type HandlerFunc func(msg Message, conn net.Conn)
-
-var handlers = map[MessageType]HandlerFunc{
-	GetClientInfo: handleGetClientInfo,
+type ClientDiscoveryAnnouncementData struct {
+	ClientName string
+	MessageID  int
 }
 
-func handleGetClientInfo(msg Message, conn net.Conn) {
+type PeerDiscoveryData struct {
+	ClientName    string
+	SenderAddress string
+	ID            int
+}
+
+type PeerDiscoveryReplyData struct {
+	SenderAddres string
+	ID           int
+}
+
+type HandlerFunc func(msg Message, bus *MessageBus)
+
+func handleGetClientInfo(msg Message) {
 	response := Message{
 		Type: GetClientInfoResponse,
 		Data: ClientInfoData{Name: "My PC", OnlineSince: time.Now()},
 	}
 
-	gob.NewEncoder(conn).Encode(response)
+	_ = response
+
+}
+
+func handlePeerDiscovery(msg Message) {
+	discoveryData, ok := msg.Data.(PeerDiscoveryData)
+	if !ok {
+		log.Println("Error: Invalid data format for PeerDiscovery message")
+		return
+	}
+
+	response := Message{
+		Type: PeerDiscoveryReply,
+		Data: PeerDiscoveryReplyData{
+			SenderAddres: "nonce", // Replace with actual address
+			ID:           discoveryData.ID,
+		},
+	}
+
+	_ = response
+
+	// You'll need to send this response somewhere
+	// For example, you might want to pass in the sender's connection or address
 }
