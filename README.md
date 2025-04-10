@@ -9,8 +9,6 @@ A distributed peer-to-peer local-network system built with Go, supporting UDP-ba
 - Docker support for easy deployment
 - Multi-instance support with host networking
 
-
-
 ## Architecture
 
 The system consists of:
@@ -103,7 +101,3 @@ The system uses host networking mode to ensure proper UDP broadcast functionalit
 2. If HTTP API is not accessible:
    - Check that HTTP_PORT is not in use
    - Verify the port is properly exposed
-
-## License
-
-[Add your license information here]
