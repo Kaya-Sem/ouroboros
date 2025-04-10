@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -23,10 +24,8 @@ func main() {
 
 	http.HandleFunc("/peers", messageBus.PeersHandler)
 
-	// Serve Swagger documentation
 	http.Handle("/docs/", http.StripPrefix("/docs", http.FileServer(http.Dir("./docs"))))
 
-	log.Println("HTTP API listening on :8081")
-	log.Fatal(http.ListenAndServe(":8081", nil))
-
+	log.Printf("HTTP API listening on :%s", messageBus.HttpPort)
+	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%s", messageBus.HttpPort), nil))
 }

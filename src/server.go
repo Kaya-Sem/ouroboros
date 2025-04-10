@@ -8,37 +8,62 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"strconv"
 	"sync"
 )
 
 const (
 	SERVER_HOST = "0.0.0.0"
-	SERVER_PORT = "8080"
 )
 
 type MessageBus struct {
-	peers    map[string]*Peer // Key is remote address
-	udpConn  *net.UDPConn
-	mu       sync.Mutex // to protect concurrent access to peers
-	handlers map[MessageType]HandlerFunc
-	stopChan chan struct{}
-	wg       sync.WaitGroup
+	peers         map[string]*Peer // Key is remote address
+	udpConn       *net.UDPConn
+	mu            sync.Mutex // to protect concurrent access to peers
+	handlers      map[MessageType]HandlerFunc
+	stopChan      chan struct{}
+	wg            sync.WaitGroup
+	port          string
+	HttpPort      string
+	broadcastPort string
 }
 
 func NewMessageBus() *MessageBus {
 	InitializeInterfaces()
+	port := os.Getenv("UDP_PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	httpPort := os.Getenv("HTTP_PORT")
+	if httpPort == "" {
+		httpPort = "8082"
+	}
+
+	broadcastPort := os.Getenv("BROADCAST_PORT")
+	if broadcastPort == "" {
+		broadcastPort = "8080"
+	}
+
 	return &MessageBus{
-		peers: make(map[string]*Peer),
+		peers:   make(map[string]*Peer),
+		udpConn: nil,
+		mu:      sync.Mutex{},
 		handlers: map[MessageType]HandlerFunc{
 			ClientDiscoveryAnnouncement: handleClientDiscoveryAnnouncement,
 		},
-		stopChan: make(chan struct{}),
+		stopChan:      make(chan struct{}),
+		wg:            sync.WaitGroup{},
+		port:          port,
+		HttpPort:      httpPort,
+		broadcastPort: broadcastPort,
 	}
 }
 
 // Start initializes the UDP server
 func (s *MessageBus) Start() error {
-	udpAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%s", SERVER_HOST, SERVER_PORT))
+	udpAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%s", SERVER_HOST, s.port))
 	if err != nil {
 		return fmt.Errorf("failed to resolve UDP address: %w", err)
 	}
@@ -49,7 +74,7 @@ func (s *MessageBus) Start() error {
 	}
 	defer s.udpConn.Close()
 
-	log.Printf("Started UDP server at %s:%s", SERVER_HOST, SERVER_PORT)
+	log.Printf("Started UDP server at %s:%s", SERVER_HOST, s.port)
 
 	s.wg.Add(1)
 	go s.handleUDPMessages()
@@ -60,7 +85,7 @@ func (s *MessageBus) Start() error {
 	return nil
 }
 
-// Stop shuts down the server gracefully
+// shuts down the server gracefully
 func (s *MessageBus) Stop() {
 	close(s.stopChan)
 	if s.udpConn != nil {
@@ -69,7 +94,6 @@ func (s *MessageBus) Stop() {
 	s.wg.Wait()
 }
 
-// handleUDPMessages processes incoming UDP messages
 func (s *MessageBus) handleUDPMessages() {
 	defer s.wg.Done()
 
@@ -89,7 +113,6 @@ func (s *MessageBus) handleUDPMessages() {
 				break
 			}
 
-			// Process the message
 			go s.processMessage(buf[:n], addr)
 		}
 	}
@@ -104,8 +127,8 @@ func (s *MessageBus) processMessage(data []byte, addr *net.UDPAddr) {
 		return
 	}
 
-	// Ignore messages from our own IP
-	if addr.IP.String() == localIP {
+	// ignore messages from our own IP AND port
+	if addr.IP.String() == localIP && addr.Port == s.udpConn.LocalAddr().(*net.UDPAddr).Port {
 		return
 	}
 
@@ -123,7 +146,6 @@ func (s *MessageBus) processMessage(data []byte, addr *net.UDPAddr) {
 	}
 }
 
-// SendMessage sends a message to a specific peer
 func (s *MessageBus) SendMessage(p *Peer, msg Message) error {
 	var buf bytes.Buffer
 	enc := gob.NewEncoder(&buf)
@@ -156,24 +178,33 @@ func (bus *MessageBus) BroadcastToPeers(msg Message) error {
 	return nil
 }
 
+// SimplePeer is a simplified version of Peer for API responses
+type SimplePeer struct {
+	Name    string `json:"name"`
+	Address string `json:"address"`
+}
+
 // PeersHandler godoc
 // @Summary      List connected peers
 // @Description  Returns a list of currently connected UDP peers
 // @Tags         peers
 // @Produce      json
-// @Success      200 {object} []Peer
+// @Success      200 {array} SimplePeer
 // @Router       /peers [get]
 func (s *MessageBus) PeersHandler(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	peers := make([]Peer, 0, len(s.peers))
+	simplePeers := make([]SimplePeer, 0, len(s.peers))
 	for _, p := range s.peers {
-		peers = append(peers, *p)
+		simplePeers = append(simplePeers, SimplePeer{
+			Name:    p.Name,
+			Address: p.Address.String(),
+		})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(peers)
+	json.NewEncoder(w).Encode(simplePeers)
 }
 
 func (s *MessageBus) AddPeer(name string, conn *net.UDPAddr) {
@@ -238,18 +269,18 @@ func (s *MessageBus) AnnouncePresence() {
 		Type: ClientDiscoveryAnnouncement,
 		Data: ClientDiscoveryAnnouncementData{
 			ClientName: GetClientName(),
-			MessageID:  69, // TODO: Replace with proper ID gen
+			MessageID:  69,
 		},
-		Sender: fmt.Sprintf("%s:%s", localIP, SERVER_PORT),
+		Sender: fmt.Sprintf("%s:%s", localIP, s.port),
 	}
 
-	err = s.BroadcastNetwork(msg, 8080) // TODO: don't hardcode
+	portNum, _ := strconv.Atoi(s.broadcastPort)
+	err = s.BroadcastNetwork(msg, portNum)
 	if err != nil {
 		log.Println(err.Error())
 	}
 }
 
-// BroadcastNetwork sends a message to the entire network (including peers we don't know yet)
 func (s *MessageBus) BroadcastNetwork(msg Message, port int) error {
 	// Get our local IP first
 	localIP, err := getLocalIP()
@@ -257,22 +288,18 @@ func (s *MessageBus) BroadcastNetwork(msg Message, port int) error {
 		return fmt.Errorf("failed to get local IP: %w", err)
 	}
 
-	// Encode the message
 	var buf bytes.Buffer
 	if err := gob.NewEncoder(&buf).Encode(msg); err != nil {
 		return fmt.Errorf("network broadcast encode error: %w", err)
 	}
 	msgData := buf.Bytes()
 
-	// Get all network interfaces
 	interfaces, err := net.Interfaces()
 	if err != nil {
 		return fmt.Errorf("get interfaces error: %w", err)
 	}
 
-	// Find the interface with our local IP and broadcast only on that one
 	for _, iface := range interfaces {
-		// Skip loopback and down interfaces
 		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
 			continue
 		}
@@ -288,9 +315,7 @@ func (s *MessageBus) BroadcastNetwork(msg Message, port int) error {
 				continue
 			}
 
-			// Check if this is the interface with our local IP
 			if ipNet.IP.String() == localIP {
-				// Create broadcast address for this network
 				broadcastIP := net.IP(make([]byte, 4))
 				for i := range ipNet.IP.To4() {
 					broadcastIP[i] = ipNet.IP.To4()[i] | ^ipNet.Mask[i]
@@ -300,7 +325,6 @@ func (s *MessageBus) BroadcastNetwork(msg Message, port int) error {
 					Port: port,
 				}
 
-				// Send broadcast packet
 				_, err := s.udpConn.WriteToUDP(msgData, broadcastAddr)
 				if err != nil {
 					return fmt.Errorf("network broadcast failed on %s: %v", iface.Name, err)
@@ -315,7 +339,7 @@ func (s *MessageBus) BroadcastNetwork(msg Message, port int) error {
 }
 
 func getLocalIP() (string, error) {
-	conn, err := net.Dial("udp", "8.8.8.8:80") // Use a public IP (won't actually connect)
+	conn, err := net.Dial("udp", "8.8.8.8:80") // public IP (won't actually connect)
 	if err != nil {
 		return "", err
 	}
